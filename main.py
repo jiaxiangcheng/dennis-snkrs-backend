@@ -7,9 +7,10 @@ import signal
 from bot import discord_bot
 from product_cache import product_cache
 from config import API_HOST, API_PORT
+from logger_config import setup_all_loggers
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Set up logging with timestamp
+setup_all_loggers(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Create FastAPI app
@@ -47,16 +48,19 @@ async def health_check():
     """Health check endpoint"""
     import time
 
-    products_count = len(product_cache.products_by_sku)
-    cache_status = "initialized" if products_count > 0 else "loading"
+    cache_status = product_cache.get_status()
 
     return {
         "status": "healthy",
         "message": "Service fully operational",
         "service": "dennis-snkrs-discord-bot",
-        "product_cache_status": cache_status,
-        "products_cached": products_count,
-        "last_cache_update": product_cache.last_update.isoformat() if product_cache.last_update else None,
+        "cache": {
+            "status": "ready" if cache_status['has_cache'] else ("refreshing" if cache_status['is_refreshing'] else "not_initialized"),
+            "is_refreshing": cache_status['is_refreshing'],
+            "has_cache": cache_status['has_cache'],
+            "products_count": cache_status['products_count'],
+            "last_update": cache_status['last_update']
+        },
         "timestamp": int(time.time())
     }
 
