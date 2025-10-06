@@ -195,9 +195,25 @@ class ProductCache:
             self.is_refreshing = False
 
     def find_product(self, sku: str, variant: str) -> Optional[Dict]:
-        """Find product by SKU and variant (case-insensitive)"""
-        # Case-insensitive SKU lookup
-        product = self.products_by_sku.get(sku.upper())
+        """Find product by SKU and variant (case-insensitive, partial SKU match)"""
+        # Case-insensitive SKU lookup with partial matching
+        sku_upper = sku.upper().strip()
+        product = None
+        matched_sku = None
+
+        # Try exact match first
+        if sku_upper in self.products_by_sku:
+            product = self.products_by_sku[sku_upper]
+            matched_sku = sku_upper
+        else:
+            # Try partial match (find SKU that contains the input)
+            for cached_sku, cached_product in self.products_by_sku.items():
+                if sku_upper in cached_sku or cached_sku in sku_upper:
+                    product = cached_product
+                    matched_sku = cached_sku
+                    logger.info(f"Partial SKU match: input '{sku_upper}' matched with '{cached_sku}'")
+                    break
+
         if not product:
             return None
 
@@ -221,7 +237,7 @@ class ProductCache:
 
                 return {
                     'product_name': product.get('title'),
-                    'sku': sku.upper(),
+                    'sku': matched_sku,  # Return the matched SKU from cache
                     'variant': variant_title,  # Return original case from database
                     'image_url': image_url,
                     'price': var.get('price'),
