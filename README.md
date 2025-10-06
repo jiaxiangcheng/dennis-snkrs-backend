@@ -15,17 +15,34 @@ This is a Python-based Discord bot for Dennis Snkrs with slash commands and API 
 
 ### 1. Clone project and set up virtual environment
 
+#### macOS/Linux
+
 ```bash
 cd /path/to/your/project
 python3 -m venv venv
-source venv/bin/activate  # On macOS/Linux
-# Or on Windows: venv\Scripts\activate
+source venv/bin/activate
+```
+
+#### Windows
+
+```bash
+cd \path\to\your\project
+py -3.13 -m venv venv
+.\venv\Scripts\activate
 ```
 
 ### 2. Install dependencies
 
+#### macOS/Linux
+
 ```bash
 pip install -r requirements.txt
+```
+
+#### Windows
+
+```bash
+.\venv\Scripts\pip.exe install -r requirements.txt
 ```
 
 ### 3. Configure Discord Bot Token
