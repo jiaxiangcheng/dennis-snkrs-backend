@@ -93,11 +93,14 @@ PORT=8000  # Defaults to 8000 if not set
 
 ## Discord Bot Commands
 
-- `/wtb <sku> <variant>`: Search product and send to webhook
-  - Example: `/wtb FZ8117-100 43`
-  - SKU must match extracted value from product's `body_html`
-  - Variant must exactly match variant `title` field (case-sensitive)
-  - Sends to webhook: `https://discord.com/api/webhooks/1032909099970613278/...`
+- `/wtb <sku> <variant>`: Search product and post WTB message to current channel
+  - Example: `/wtb FZ8117-100 43` or `/wtb fz8117-100 43` (case-insensitive)
+  - **Permissions**: Requires one of two allowed role IDs (1424509842491707392 or 1338230016147980308)
+  - **SKU matching**: Case-insensitive (FZ8117-100 = fz8117-100)
+  - **Variant matching**: Case-insensitive (43 = 43)
+  - Posts to the same channel where command was executed
+  - Message format: "WANT TO BUY" + role mention + channel mention + WTB link + product embed
+  - React with ✅ to delete the message
 
 ## API Endpoints
 
@@ -107,7 +110,12 @@ PORT=8000  # Defaults to 8000 if not set
 
 ## Important Implementation Details
 
-- **Product Variant Matching**: Uses exact string comparison, not fuzzy matching. Variant "43" ≠ "43.0"
+- **Case-Insensitive Matching**: Both SKU and variant matching ignore case
+  - `/wtb FZ8117-100 43` = `/wtb fz8117-100 43` = `/wtb Fz8117-100 43`
+- **Cache File Format**:
+  - Saved as SKU-indexed JSON object (not array) for easy reading
+  - Structure: `{"products": {"SKU-123": {...}, ...}, "products_without_sku": [...]}`
+  - Includes metadata: `total_products`, `products_with_sku`, `last_update`
 - **Cache Behavior**:
   - First startup without cache: Fetches all products (~528), blocks commands until complete
   - Subsequent startups: Loads from `products_cache.json` if < 24h old
@@ -116,7 +124,13 @@ PORT=8000  # Defaults to 8000 if not set
 - **Command Availability**:
   - Blocked: When `is_refreshing=True` AND `has_cache=False` (initial fetch only)
   - Available: When cache exists, even during background refresh
+- **Role-Based Permissions**:
+  - Only users with role ID 1424509842491707392 or 1338230016147980308 can use `/wtb`
+  - Change `allowed_role_ids` in `bot.py` to modify
 - **Pagination**: Fetches products in pages of 250 until empty response
-- **Webhook URL**: Hardcoded in `bot.py:64`. Change requires code modification.
+- **Message Deletion**: Messages posted by bot containing "WANT TO BUY" can be deleted by anyone reacting with ✅
+- **Channel Mentions**: Role mention (1344067083465654282) and channel mention (1344381116613660682) are hardcoded in message content
+- **WTB Link**: Hardcoded to `https://www.wtbmarketlist.eu/list/355476796801679378`
 - **Image Priority**: Uses variant `featured_image` if set, otherwise first product image
+- **Logging**: All logs include timestamps via `logger_config.py` with colored output
 - **No Testing**: No test framework configured
