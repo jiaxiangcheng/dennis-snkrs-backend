@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py:*)",
+      "Bash(if exist venv rmdir /s /q venv)",
+      "Bash(venv\\Scripts\\python.exe:*)",
+      "Bash(./venv/Scripts/python.exe --version)",
+      "Bash(./venv/Scripts/pip.exe install:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
