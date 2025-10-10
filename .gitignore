@@ -72,3 +72,5 @@ dmypy.json
 *.bak
 *.tmp
 .cache/
+
+__pycache__/*
