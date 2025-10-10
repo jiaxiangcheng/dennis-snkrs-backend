@@ -170,6 +170,22 @@ class DiscordBot:
                 channel = interaction.channel
                 await channel.send(content=content_message, embed=embed)
 
+                # Send same message to webhook
+                webhook_url = "https://discord.com/api/webhooks/1425596920683823114/8TrxnzZs_L71xfab_OAf1q_RSfmx7nN8Nkrr5gdQNmeDU9gw5T0tXrwV8MuMjM7y35qF"
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        webhook_payload = {
+                            "content": content_message,
+                            "embeds": [embed.to_dict()]
+                        }
+                        async with session.post(webhook_url, json=webhook_payload) as response:
+                            if response.status == 204 or response.status == 200:
+                                logger.info(f'WTB command: Webhook sent successfully for {sku} - {variant}')
+                            else:
+                                logger.error(f'WTB command: Webhook failed with status {response.status}')
+                except Exception as webhook_error:
+                    logger.error(f'WTB command: Failed to send webhook: {webhook_error}')
+
                 # Confirm to user
                 await interaction.followup.send(
                     f"✅ WTB request sent for {product_info['product_name']} - Size {variants_display}",
