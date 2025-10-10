@@ -170,12 +170,16 @@ class DiscordBot:
                 channel = interaction.channel
                 await channel.send(content=content_message, embed=embed)
 
-                # Send same message to webhook
+                # Send same message to webhook (without role/channel mentions)
                 webhook_url = "https://discord.com/api/webhooks/1425596920683823114/8TrxnzZs_L71xfab_OAf1q_RSfmx7nN8Nkrr5gdQNmeDU9gw5T0tXrwV8MuMjM7y35qF"
                 try:
                     async with aiohttp.ClientSession() as session:
+                        webhook_content = (
+                            "**WANT TO BUY**\n"
+                            "https://www.wtbmarketlist.eu/list/355476796801679378"
+                        )
                         webhook_payload = {
-                            "content": content_message,
+                            "content": webhook_content,
                             "embeds": [embed.to_dict()]
                         }
                         async with session.post(webhook_url, json=webhook_payload) as response:
