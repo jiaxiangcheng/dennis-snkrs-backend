@@ -13,7 +13,7 @@ class ProductCache:
     def __init__(self, cache_file: str = "products_cache.json"):
         self.cache_file = Path(cache_file)
         self.products_url = "https://www.dennis-snkrs.com/products.json"
-        self.cache_duration = timedelta(hours=24)
+        self.cache_duration = timedelta(hours=1)
         self.products_by_sku: Dict[str, dict] = {}
         self.last_update: Optional[datetime] = None
         self.is_refreshing: bool = False
@@ -247,13 +247,90 @@ class ProductCache:
 
         return None
 
+    def find_product_with_variants(self, sku: str, variants: List[str]) -> Optional[Dict]:
+        """Find product by SKU and multiple variants (case-insensitive)
+
+        Returns product info with all requested variants, or None if any variant is invalid.
+        """
+        # Case-insensitive SKU lookup with partial matching
+        sku_upper = sku.upper().strip()
+        product = None
+        matched_sku = None
+
+        # Try exact match first
+        if sku_upper in self.products_by_sku:
+            product = self.products_by_sku[sku_upper]
+            matched_sku = sku_upper
+        else:
+            # Try partial match (find SKU that contains the input)
+            for cached_sku, cached_product in self.products_by_sku.items():
+                if sku_upper in cached_sku or cached_sku in sku_upper:
+                    product = cached_product
+                    matched_sku = cached_sku
+                    logger.info(f"Partial SKU match: input '{sku_upper}' matched with '{cached_sku}'")
+                    break
+
+        if not product:
+            return None
+
+        # Validate all variants exist (case-insensitive)
+        product_variants = product.get('variants', [])
+        variant_titles_lower = {var.get('title', '').strip().lower(): var.get('title', '').strip()
+                                for var in product_variants}
+
+        matched_variants = []
+        invalid_variants = []
+
+        for variant_input in variants:
+            variant_lower = variant_input.lower().strip()
+            if variant_lower in variant_titles_lower:
+                # Store the original case from database
+                matched_variants.append(variant_titles_lower[variant_lower])
+            else:
+                invalid_variants.append(variant_input)
+
+        # If any variant is invalid, return error info
+        if invalid_variants:
+            return {
+                'error': True,
+                'invalid_variants': invalid_variants,
+                'sku': matched_sku
+            }
+
+        # Get image from first variant
+        first_variant_lower = variants[0].lower().strip()
+        image_url = None
+
+        images = product.get('images', [])
+        if images:
+            image_url = images[0]['src']
+
+        # Check if first variant has featured image
+        for var in product_variants:
+            if var.get('title', '').strip().lower() == first_variant_lower:
+                variant_image_id = var.get('featured_image')
+                if variant_image_id:
+                    for img in images:
+                        if img.get('id') == variant_image_id:
+                            image_url = img['src']
+                            break
+                break
+
+        return {
+            'product_name': product.get('title'),
+            'sku': matched_sku,
+            'variants': matched_variants,  # List of matched variants with original case
+            'image_url': image_url,
+            'product_url': f"https://www.dennis-snkrs.com/products/{product.get('handle')}"
+        }
+
     async def start_background_refresh(self):
-        """Start background task to refresh cache every 24 hours"""
+        """Start background task to refresh cache every 1 hour"""
         while True:
-            # Wait 24 hours before refreshing
-            await asyncio.sleep(24 * 60 * 60)
-            logger.info("24h cache refresh triggered")
-            # Force refresh after 24h
+            # Wait 1 hour before refreshing
+            await asyncio.sleep(1 * 60 * 60)
+            logger.info("1h cache refresh triggered")
+            # Force refresh after 1h
             await self.refresh(force=True)
 
     def get_status(self) -> Dict[str, any]:

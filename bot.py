@@ -84,7 +84,7 @@ class DiscordBot:
         @self.tree.command(name='wtb', description='Want to buy - Search for a product by SKU and size')
         @app_commands.describe(
             sku='Product SKU code (e.g., FZ8117-100)',
-            variant='Size/variant (e.g., 43)'
+            variant='Size/variant (e.g., 43 or 40|41|42|43 for multiple sizes)'
         )
         async def wtb_command(interaction: discord.Interaction, sku: str, variant: str):
             await interaction.response.defer(ephemeral=True)
@@ -115,15 +115,35 @@ class DiscordBot:
                     logger.info(f'WTB command blocked: Cache is refreshing and no data available yet')
                     return
 
-                # Search for product
-                product_info = product_cache.find_product(sku, variant)
+                # Parse variants (pipe-separated)
+                variant_list = [v.strip() for v in variant.split('|')]
+
+                # Search for product with multiple variants
+                if len(variant_list) > 1:
+                    product_info = product_cache.find_product_with_variants(sku, variant_list)
+                else:
+                    # Single variant - use original method
+                    product_info = product_cache.find_product(sku, variant_list[0])
+                    if product_info:
+                        # Convert to multi-variant format
+                        product_info['variants'] = [product_info['variant']]
 
                 if not product_info:
                     await interaction.followup.send(
-                        f"❌ Product not found for SKU: {sku} with variant: {variant}",
+                        f"❌ Product not found for SKU: {sku}",
                         ephemeral=True
                     )
-                    logger.info(f'WTB command: Product not found - SKU: {sku}, Variant: {variant}')
+                    logger.info(f'WTB command: Product not found - SKU: {sku}')
+                    return
+
+                # Check for invalid variants
+                if product_info.get('error'):
+                    invalid = ', '.join(product_info['invalid_variants'])
+                    await interaction.followup.send(
+                        f"❌ Invalid variant(s) for SKU {product_info['sku']}: {invalid}",
+                        ephemeral=True
+                    )
+                    logger.info(f'WTB command: Invalid variants - SKU: {sku}, Invalid: {invalid}')
                     return
 
                 # Send message to the current channel
@@ -134,9 +154,10 @@ class DiscordBot:
                     "https://www.wtbmarketlist.eu/list/355476796801679378"
                 )
 
-                # Create embed
+                # Create embed with multiple variants
+                variants_display = ', '.join(product_info['variants'])
                 embed = discord.Embed(
-                    description=f"**{product_info['product_name']}**\n**SKU:** {product_info['sku']}\n**Size:** {product_info['variant']}",
+                    description=f"**{product_info['product_name']}**\n**SKU:** {product_info['sku']}\n**Size:** {variants_display}",
                     color=0x5865F2,  # Discord blurple color
                     timestamp=discord.utils.utcnow()
                 )
@@ -151,10 +172,10 @@ class DiscordBot:
 
                 # Confirm to user
                 await interaction.followup.send(
-                    f"✅ WTB request sent for {product_info['product_name']} - Size {product_info['variant']}",
+                    f"✅ WTB request sent for {product_info['product_name']} - Size {variants_display}",
                     ephemeral=True
                 )
-                logger.info(f'WTB command: Sent message in channel {interaction.channel_id} for {sku} - {variant} by {interaction.user}')
+                logger.info(f'WTB command: Sent message in channel {interaction.channel_id} for {sku} - {variants_display} by {interaction.user}')
 
             except Exception as e:
                 logger.error(f'Error in WTB command: {e}', exc_info=True)
