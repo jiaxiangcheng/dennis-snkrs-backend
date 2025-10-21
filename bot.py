@@ -84,7 +84,7 @@ class DiscordBot:
         @self.tree.command(name='wtb', description='Want to buy - Search for a product by SKU and size')
         @app_commands.describe(
             sku='Product SKU code (e.g., FZ8117-100)',
-            variant='Size/variant (e.g., 43 or 40|41|42|43 for multiple sizes)'
+            variant='Size/variant (e.g., 43, 40|41|42|43 for multiple sizes, or "all" for ALL SIZES)'
         )
         async def wtb_command(interaction: discord.Interaction, sku: str, variant: str):
             await interaction.response.defer(ephemeral=True)
@@ -118,15 +118,23 @@ class DiscordBot:
                 # Parse variants (pipe-separated)
                 variant_list = [v.strip() for v in variant.split('|')]
 
-                # Search for product with multiple variants
-                if len(variant_list) > 1:
-                    product_info = product_cache.find_product_with_variants(sku, variant_list)
-                else:
-                    # Single variant - use original method
-                    product_info = product_cache.find_product(sku, variant_list[0])
+                # Check if variant is "all" (case-insensitive)
+                if len(variant_list) == 1 and variant_list[0].lower() == 'all':
+                    # Special case: search for product without checking variants
+                    product_info = product_cache.find_product_all_sizes(sku)
                     if product_info:
-                        # Convert to multi-variant format
-                        product_info['variants'] = [product_info['variant']]
+                        # Set variants to "ALL SIZES"
+                        product_info['variants'] = ['ALL SIZES']
+                else:
+                    # Search for product with multiple variants
+                    if len(variant_list) > 1:
+                        product_info = product_cache.find_product_with_variants(sku, variant_list)
+                    else:
+                        # Single variant - use original method
+                        product_info = product_cache.find_product(sku, variant_list[0])
+                        if product_info:
+                            # Convert to multi-variant format
+                            product_info['variants'] = [product_info['variant']]
 
                 if not product_info:
                     await interaction.followup.send(

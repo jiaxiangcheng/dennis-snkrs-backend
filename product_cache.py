@@ -247,6 +247,44 @@ class ProductCache:
 
         return None
 
+    def find_product_all_sizes(self, sku: str) -> Optional[Dict]:
+        """Find product by SKU only, without checking variant existence
+
+        Used for "all sizes" requests where we don't validate specific variants.
+        Returns product info with image using same logic as variant search.
+        """
+        # Case-insensitive SKU lookup with partial matching
+        sku_upper = sku.upper().strip()
+        product = None
+        matched_sku = None
+
+        # Try exact match first
+        if sku_upper in self.products_by_sku:
+            product = self.products_by_sku[sku_upper]
+            matched_sku = sku_upper
+        else:
+            # Try partial match (find SKU that contains the input)
+            for cached_sku, cached_product in self.products_by_sku.items():
+                if sku_upper in cached_sku or cached_sku in sku_upper:
+                    product = cached_product
+                    matched_sku = cached_sku
+                    logger.info(f"Partial SKU match: input '{sku_upper}' matched with '{cached_sku}'")
+                    break
+
+        if not product:
+            return None
+
+        # Get product image (first image)
+        images = product.get('images', [])
+        image_url = images[0]['src'] if images else None
+
+        return {
+            'product_name': product.get('title'),
+            'sku': matched_sku,
+            'image_url': image_url,
+            'product_url': f"https://www.dennis-snkrs.com/products/{product.get('handle')}"
+        }
+
     def find_product_with_variants(self, sku: str, variants: List[str]) -> Optional[Dict]:
         """Find product by SKU and multiple variants (case-insensitive)
 
