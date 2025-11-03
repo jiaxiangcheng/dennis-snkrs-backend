@@ -179,25 +179,36 @@ class DiscordBot:
                 await channel.send(content=content_message, embed=embed)
 
                 # Send same message to multiple webhooks (without role/channel mentions)
-                webhook_urls = [
-                    "https://discord.com/api/webhooks/1425596920683823114/8TrxnzZs_L71xfab_OAf1q_RSfmx7nN8Nkrr5gdQNmeDU9gw5T0tXrwV8MuMjM7y35qF",
-                    "https://discord.com/api/webhooks/1433380024102424576/fuawo2I9si_DXOY2S2ZaDbvn2wEdZUGMFwuFkLbtLT-k_NzrgfYB0vvFuQ2eKZhLKZ5u"
+                webhook_configs = [
+                    {
+                        "url": "https://discord.com/api/webhooks/1425596920683823114/8TrxnzZs_L71xfab_OAf1q_RSfmx7nN8Nkrr5gdQNmeDU9gw5T0tXrwV8MuMjM7y35qF",
+                        "include_link": True
+                    },
+                    {
+                        "url": "https://discord.com/api/webhooks/1433380024102424576/fuawo2I9si_DXOY2S2ZaDbvn2wEdZUGMFwuFkLbtLT-k_NzrgfYB0vvFuQ2eKZhLKZ5u",
+                        "include_link": False
+                    }
                 ]
-
-                webhook_content = (
-                    "**WANT TO BUY**\n"
-                    "https://www.wtbmarketlist.eu/list/355476796801679378"
-                )
-                webhook_payload = {
-                    "content": webhook_content,
-                    "embeds": [embed.to_dict()]
-                }
 
                 # Send to all webhooks
                 async with aiohttp.ClientSession() as session:
-                    for idx, webhook_url in enumerate(webhook_urls, 1):
+                    for idx, config in enumerate(webhook_configs, 1):
                         try:
-                            async with session.post(webhook_url, json=webhook_payload) as response:
+                            # Build webhook content based on configuration
+                            if config["include_link"]:
+                                webhook_content = (
+                                    "**WANT TO BUY**\n"
+                                    "https://www.wtbmarketlist.eu/list/355476796801679378"
+                                )
+                            else:
+                                webhook_content = "**WANT TO BUY**"
+
+                            webhook_payload = {
+                                "content": webhook_content,
+                                "embeds": [embed.to_dict()]
+                            }
+
+                            async with session.post(config["url"], json=webhook_payload) as response:
                                 if response.status == 204 or response.status == 200:
                                     logger.info(f'WTB command: Webhook #{idx} sent successfully for {sku} - {variant}')
                                 else:
