@@ -187,6 +187,10 @@ class DiscordBot:
                     {
                         "url": "https://discord.com/api/webhooks/1433380024102424576/fuawo2I9si_DXOY2S2ZaDbvn2wEdZUGMFwuFkLbtLT-k_NzrgfYB0vvFuQ2eKZhLKZ5u",
                         "include_link": False
+                    },
+                    {
+                        "url": "https://discord.com/api/webhooks/1451884282254594233/1mnrsR8EO9xOHVfGUA8kDqHk7uuHPUgu0huu-oV4GcUngrxWP9W2J-E98xCgG7cT4Dmx",
+                        "include_link": False
                     }
                 ]
 
