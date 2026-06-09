@@ -144,6 +144,22 @@ class DiscordBot:
                     logger.info(f'WTB command: Product not found - SKU: {sku}')
                     return
 
+                # Check for ambiguous SKU (one SKU shared by multiple products)
+                if product_info.get('ambiguous'):
+                    lines = '\n'.join(
+                        f"• {c['title']} — {c['handle']}"
+                        for c in product_info['candidates']
+                    )
+                    await interaction.followup.send(
+                        f"⚠️ SKU `{product_info['sku']}` matches multiple products:\n{lines}\n\n"
+                        "These products share the same SKU on the store, so I can't tell them apart. "
+                        "Please fix the duplicate SKU in Shopify, or contact an admin.",
+                        ephemeral=True
+                    )
+                    logger.info(f'WTB command: Ambiguous SKU {product_info["sku"]} -> '
+                                f'{len(product_info["candidates"])} products')
+                    return
+
                 # Check for invalid variants
                 if product_info.get('error'):
                     invalid = ', '.join(product_info['invalid_variants'])

@@ -14,7 +14,9 @@ class ProductCache:
         self.cache_file = Path(cache_file)
         self.products_url = "https://www.dennis-snkrs.com/products.json"
         self.cache_duration = timedelta(hours=1)
-        self.products_by_sku: Dict[str, dict] = {}
+        # One SKU can map to multiple products (e.g. same model, different colorways
+        # that share/duplicate a SKU). Store a list to avoid silently overwriting.
+        self.products_by_sku: Dict[str, List[dict]] = {}
         self.last_update: Optional[datetime] = None
         self.is_refreshing: bool = False
         self.has_cache: bool = False
@@ -71,38 +73,64 @@ class ProductCache:
             logger.error(f"Error fetching products: {e}")
             return all_products if all_products else []
 
+    def _collect_skus(self, product: dict) -> List[str]:
+        """Collect all SKUs for a product, normalized to uppercase.
+
+        Primary source is the real Shopify variant SKU (variant['sku']); this is
+        authoritative and matches what users see in the Shopify admin. The SKU
+        scraped from body_html is unreliable (hand-entered, often stale/wrong) and
+        is only used as a fallback when no variant carries a SKU.
+        """
+        skus = set()
+        for var in product.get('variants', []):
+            vsku = (var.get('sku') or '').strip()
+            if vsku:
+                skus.add(vsku.upper())
+
+        # Product-level sku (cache "new format") also counts as authoritative.
+        psku = (product.get('sku') or '').strip()
+        if psku:
+            skus.add(psku.upper())
+
+        # Fallback only when no real SKU exists anywhere on the product.
+        if not skus:
+            html_sku = self._extract_sku_from_html(product.get('body_html', ''))
+            if html_sku:
+                skus.add(html_sku.strip().upper())
+
+        return list(skus)
+
     def _build_sku_index(self, products: List[dict]):
-        """Build SKU-based index from products"""
+        """Build SKU-based index from products (one SKU -> list of products)"""
         self.products_by_sku = {}
         for product in products:
-            # Check if product already has SKU (new format)
-            sku = product.get('sku')
-            if not sku:
-                # Extract from body_html (old format or raw API data)
-                sku = self._extract_sku_from_html(product.get('body_html', ''))
-
-            if sku:
-                # Store product with all its variants
-                self.products_by_sku[sku] = product
+            for sku in self._collect_skus(product):
+                self.products_by_sku.setdefault(sku, [])
+                # Avoid indexing the exact same product object twice under one SKU.
+                if product not in self.products_by_sku[sku]:
+                    self.products_by_sku[sku].append(product)
                 logger.debug(f"Indexed product: {product.get('title')} with SKU: {sku}")
 
         # Mark that we have cache available
         if self.products_by_sku:
             self.has_cache = True
-            logger.info(f"Indexed {len(self.products_by_sku)} products by SKU")
+            collisions = sum(1 for v in self.products_by_sku.values() if len(v) > 1)
+            logger.info(f"Indexed {len(self.products_by_sku)} SKUs ({collisions} shared by multiple products)")
 
     def _save_cache(self, products: List[dict]):
         """Save products to cache file in SKU-indexed format"""
         try:
-            # Build SKU-indexed structure for easier reading
+            # Build SKU-indexed structure for easier reading.
+            # Value is a list because one SKU may map to multiple products.
             products_by_sku = {}
             products_without_sku = []
 
             for product in products:
-                sku = self._extract_sku_from_html(product.get('body_html', ''))
-                if sku:
-                    products_by_sku[sku] = {
-                        'sku': sku,
+                skus = self._collect_skus(product)
+                if skus:
+                    entry = {
+                        'sku': skus[0],
+                        'all_skus': skus,
                         'title': product.get('title'),
                         'handle': product.get('handle'),
                         'vendor': product.get('vendor'),
@@ -111,6 +139,8 @@ class ProductCache:
                         'images': product.get('images', []),
                         'product_url': f"https://www.dennis-snkrs.com/products/{product.get('handle')}"
                     }
+                    for sku in skus:
+                        products_by_sku.setdefault(sku, []).append(entry)
                 else:
                     products_without_sku.append({
                         'title': product.get('title'),
@@ -148,10 +178,21 @@ class ProductCache:
                 if datetime.now() - self.last_update < self.cache_duration:
                     products_data = cache_data.get('products', [])
 
-                    # Check if new format (dict) or old format (list)
+                    # Check format and flatten to a unique list of product dicts
+                    # for _build_sku_index (which re-derives SKUs itself).
                     if isinstance(products_data, dict):
-                        # New format: already SKU-indexed, convert to list for _build_sku_index
-                        products = list(products_data.values())
+                        # New format: SKU-indexed. Values may be a single product
+                        # (legacy) or a list of products (current).
+                        products = []
+                        seen = set()
+                        for value in products_data.values():
+                            entries = value if isinstance(value, list) else [value]
+                            for entry in entries:
+                                handle = entry.get('handle')
+                                key = handle or id(entry)
+                                if key not in seen:
+                                    seen.add(key)
+                                    products.append(entry)
                         logger.info(f"Loaded {len(products)} products from cache (new format)")
                     else:
                         # Old format: list of products
@@ -194,28 +235,65 @@ class ProductCache:
             # Clear refreshing flag
             self.is_refreshing = False
 
-    def find_product(self, sku: str, variant: str) -> Optional[Dict]:
-        """Find product by SKU and variant (case-insensitive, partial SKU match)"""
-        # Case-insensitive SKU lookup with partial matching
-        sku_upper = sku.upper().strip()
-        product = None
-        matched_sku = None
+    def _lookup_sku(self, sku: str):
+        """Resolve an input SKU to (products, matched_sku, ambiguous_candidates).
 
-        # Try exact match first
+        Matching strategy:
+          1. Exact match (preferred — avoids the false positives that bidirectional
+             substring matching used to cause).
+          2. Partial match only as a fallback, and only where the cached SKU
+             *contains* the input (input is a prefix/substring of a real SKU);
+             we no longer match when the cached SKU is a substring of the input.
+
+        Returns:
+          (products, matched_sku, candidates)
+          - products: list of product dicts under the matched SKU (may be >1)
+          - matched_sku: the cache key that matched, or None
+          - candidates: list of {title, handle, sku} when the SKU maps to multiple
+                        distinct products (ambiguous); empty otherwise.
+        """
+        sku_upper = sku.upper().strip()
+        matched_sku = None
+        products = None
+
         if sku_upper in self.products_by_sku:
-            product = self.products_by_sku[sku_upper]
             matched_sku = sku_upper
+            products = self.products_by_sku[sku_upper]
         else:
-            # Try partial match (find SKU that contains the input)
-            for cached_sku, cached_product in self.products_by_sku.items():
-                if sku_upper in cached_sku or cached_sku in sku_upper:
-                    product = cached_product
+            for cached_sku, cached_products in self.products_by_sku.items():
+                if sku_upper and sku_upper in cached_sku:
                     matched_sku = cached_sku
+                    products = cached_products
                     logger.info(f"Partial SKU match: input '{sku_upper}' matched with '{cached_sku}'")
                     break
 
-        if not product:
+        if not products:
+            return None, None, []
+
+        candidates = []
+        if len(products) > 1:
+            candidates = [
+                {
+                    'title': p.get('title'),
+                    'handle': p.get('handle'),
+                    'sku': matched_sku,
+                }
+                for p in products
+            ]
+
+        return products, matched_sku, candidates
+
+    def find_product(self, sku: str, variant: str) -> Optional[Dict]:
+        """Find product by SKU and variant (case-insensitive, exact-first SKU match)"""
+        products, matched_sku, candidates = self._lookup_sku(sku)
+
+        if not products:
             return None
+
+        if candidates:
+            return {'ambiguous': True, 'sku': matched_sku, 'candidates': candidates}
+
+        product = products[0]
 
         # Find matching variant (case-insensitive)
         variant_lower = str(variant).lower().strip()
@@ -253,26 +331,15 @@ class ProductCache:
         Used for "all sizes" requests where we don't validate specific variants.
         Returns product info with image using same logic as variant search.
         """
-        # Case-insensitive SKU lookup with partial matching
-        sku_upper = sku.upper().strip()
-        product = None
-        matched_sku = None
+        products, matched_sku, candidates = self._lookup_sku(sku)
 
-        # Try exact match first
-        if sku_upper in self.products_by_sku:
-            product = self.products_by_sku[sku_upper]
-            matched_sku = sku_upper
-        else:
-            # Try partial match (find SKU that contains the input)
-            for cached_sku, cached_product in self.products_by_sku.items():
-                if sku_upper in cached_sku or cached_sku in sku_upper:
-                    product = cached_product
-                    matched_sku = cached_sku
-                    logger.info(f"Partial SKU match: input '{sku_upper}' matched with '{cached_sku}'")
-                    break
-
-        if not product:
+        if not products:
             return None
+
+        if candidates:
+            return {'ambiguous': True, 'sku': matched_sku, 'candidates': candidates}
+
+        product = products[0]
 
         # Get product image (first image)
         images = product.get('images', [])
@@ -290,26 +357,15 @@ class ProductCache:
 
         Returns product info with all requested variants, or None if any variant is invalid.
         """
-        # Case-insensitive SKU lookup with partial matching
-        sku_upper = sku.upper().strip()
-        product = None
-        matched_sku = None
+        products, matched_sku, candidates = self._lookup_sku(sku)
 
-        # Try exact match first
-        if sku_upper in self.products_by_sku:
-            product = self.products_by_sku[sku_upper]
-            matched_sku = sku_upper
-        else:
-            # Try partial match (find SKU that contains the input)
-            for cached_sku, cached_product in self.products_by_sku.items():
-                if sku_upper in cached_sku or cached_sku in sku_upper:
-                    product = cached_product
-                    matched_sku = cached_sku
-                    logger.info(f"Partial SKU match: input '{sku_upper}' matched with '{cached_sku}'")
-                    break
-
-        if not product:
+        if not products:
             return None
+
+        if candidates:
+            return {'ambiguous': True, 'sku': matched_sku, 'candidates': candidates}
+
+        product = products[0]
 
         # Validate all variants exist (case-insensitive)
         product_variants = product.get('variants', [])
