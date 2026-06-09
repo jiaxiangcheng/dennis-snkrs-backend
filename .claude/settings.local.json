@@ -5,7 +5,11 @@
       "Bash(if exist venv rmdir /s /q venv)",
       "Bash(venv\\Scripts\\python.exe:*)",
       "Bash(./venv/Scripts/python.exe --version)",
-      "Bash(./venv/Scripts/pip.exe install:*)"
+      "Bash(./venv/Scripts/pip.exe install:*)",
+      "WebFetch(domain:community.shopify.dev)",
+      "WebFetch(domain:shopify.dev)",
+      "Bash(source:*)",
+      "Bash(python scripts/variants-migrates/migrate.py:*)"
     ],
     "deny": [],
     "ask": []

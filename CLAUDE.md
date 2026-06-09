@@ -4,72 +4,59 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Discord bot for Dennis Snkrs that combines a FastAPI REST service with Discord bot functionality. The system provides a `/wtb` (Want To Buy) slash command that searches products by SKU and variant (case-insensitive), then posts WTB messages with product details directly to the channel where the command was used. Messages can be deleted by reacting with ✅.
+Discord bot for Dennis Snkrs that combines a FastAPI REST service with Discord bot functionality. The `/wtb` (Want To Buy) slash command searches products by SKU and variant (case-insensitive), posts WTB messages with product embeds to the current channel, and broadcasts to multiple Discord webhooks. Messages can be deleted by reacting with ✅.
 
 ## Architecture
 
-### Core Components
+### Concurrent Service Model
 
-- **main.py**: Entry point that orchestrates three concurrent async tasks: FastAPI server, Discord bot, and product cache refresh loop
-- **bot.py**: Discord bot with slash command registration and message sending
-- **product_cache.py**: Product data manager that fetches from dennis-snkrs.com/products.json, caches locally, and auto-refreshes every 24h
-- **logger_config.py**: Custom logger configuration with colored output and timestamps
-- **config.py**: Environment-based configuration (Discord token, API host/port)
-- **discord_service.py**: Legacy service (currently unused)
+`main.py` orchestrates three concurrent async tasks via `asyncio.wait()`:
+1. **FastAPI server** (uvicorn) — REST API with health check
+2. **Discord bot** (`bot.py`) — Slash command handling and message management
+3. **Product cache refresh** (`product_cache.py`) — 1-hour background refresh loop
 
-### Key Architecture Patterns
+If any task completes or fails, remaining tasks are cancelled (fail-fast).
 
-**Concurrent Service Model**: Three async tasks run in parallel via `asyncio.wait()`:
-- FastAPI server (uvicorn)
-- Discord bot client
-- Product cache background refresh (24h loop)
+### Product Caching (`product_cache.py`)
 
-**Product Caching Strategy**:
-- Products fetched from `https://www.dennis-snkrs.com/products.json` with pagination (250 items per page)
-- SKU extracted from `body_html` field via regex (`>([A-Z0-9\-]+)<`)
-- Cached to `products_cache.json` in SKU-indexed format (not array)
-- In-memory SKU index (`products_by_sku` dict) for O(1) lookup
-- **Case-insensitive matching**: Both SKU and variant matching ignore case
-- **Cache Status Tracking**:
-  - `is_refreshing`: True when fetching products from API
-  - `has_cache`: True when products are loaded in memory
-  - Commands blocked only if refreshing AND no cache exists
-  - Commands work during refresh if existing cache is available
+- Fetches from `https://www.dennis-snkrs.com/products.json` with pagination (250/page)
+- SKU extracted from `body_html` via regex `>([A-Z0-9\-]+)<`, fallback to stripped text
+- In-memory dict `products_by_sku` for O(1) lookup; persisted to `products_cache.json` as SKU-indexed JSON
+- Cache file valid for 1 hour (`cache_duration = timedelta(hours=1)`); background refresh also runs every 1 hour
+- **Cache availability**: Commands blocked only when `is_refreshing=True` AND `has_cache=False` (first startup only). During background refresh, existing cache remains usable.
+- SKU matching: case-insensitive with partial match fallback (bidirectional substring)
+- Variant matching: case-insensitive exact match against variant titles
 
-**Message Flow**:
-1. User executes `/wtb SKU VARIANT` in Discord (requires Admin or allowed role)
-2. Bot checks role permissions (2 allowed role IDs)
-3. Bot checks cache status:
-   - If `is_refreshing=True` AND `has_cache=False`: Return "Product data is being refreshed" message
-   - If cache available: Proceed with search
-4. Bot searches `product_cache.products_by_sku[SKU.upper()]`
-5. Matches variant case-insensitively from product's variants array
-6. Bot posts message to the **same channel** where command was used (not webhook)
-7. Message includes: role mention, channel mention, WTB link, and product embed
-8. Users can delete message by adding ✅ reaction
+### `/wtb` Command Flow (`bot.py`)
+
+1. Permission check: user must have one of two hardcoded role IDs (`allowed_role_ids`)
+2. Cache availability check
+3. Variant parsing: single (`43`), pipe-separated (`40|41|42`), or `all`
+4. Product search via `find_product()`, `find_product_with_variants()`, or `find_product_all_sizes()`
+5. Post to current channel with role mention, channel mention, WTB link, and product embed
+6. Broadcast to 3 hardcoded Discord webhooks (first includes WTB link, others don't)
+7. Ephemeral confirmation to user
+
+### Message Deletion
+
+`on_raw_reaction_add` event: ✅ reaction on any bot message containing "want to buy" (case-insensitive) triggers message deletion.
+
+### Hardcoded IDs in `bot.py`
+
+- Allowed role IDs: `1424509842491707392`, `1338230016147980308`
+- Role mention: `<@&1344067083465654282>`
+- Channel mention: `<#1344381116613660682>`
+- WTB link: `https://www.wtbmarketlist.eu/list/355476796801679378`
+- 3 webhook URLs in `webhook_configs`
+
+### Other Files
+
+- **config.py**: Loads `DISCORD_BOT_TOKEN` from `.env`, sets `API_HOST="0.0.0.0"` and `API_PORT` (env `PORT` or 8000)
+- **logger_config.py**: Colored formatter with timestamps; suppresses noisy `discord`/`aiohttp` loggers
+- **discord_service.py**: Legacy, unused — message search/deletion service
+- **start_api_only.py** / **start_bot_only.py**: Run individual components without the other
 
 ## Development Commands
-
-### Starting the Application
-
-```bash
-# Full application (API + Discord bot + cache refresh)
-python main.py
-
-# API only (no bot)
-python start_api_only.py
-
-# Bot only (no API server)
-python start_bot_only.py
-
-# With auto-reload (development)
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-
-# Using shell script (installs deps + runs main.py)
-./start.sh
-```
-
-### Dependencies
 
 ```bash
 # Activate virtual environment
@@ -77,60 +64,45 @@ source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Run full application (API + bot + cache refresh)
+python main.py
+
+# Run API only (no Discord bot)
+python start_api_only.py
+
+# Run bot only (no API server)
+python start_bot_only.py
+
+# Dev mode with auto-reload (API only, no bot)
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+# Shell script (installs deps + runs main.py)
+./start.sh
 ```
 
 ### Environment Setup
 
-Required environment variable in `.env` file:
+`.env` file (required):
 ```
 DISCORD_BOT_TOKEN=your_bot_token_here
+PORT=8000  # optional, defaults to 8000
 ```
 
-Optional:
-```
-PORT=8000  # Defaults to 8000 if not set
-```
+### API Endpoints
 
-## Discord Bot Commands
+- `GET /` — Service info
+- `GET /health` — Health check with cache status
+- `GET /docs` — Swagger UI
 
-- `/wtb <sku> <variant>`: Search product and post WTB message to current channel
-  - Example: `/wtb FZ8117-100 43` or `/wtb fz8117-100 43` (case-insensitive)
-  - **Permissions**: Requires one of two allowed role IDs (1424509842491707392 or 1338230016147980308)
-  - **SKU matching**: Case-insensitive (FZ8117-100 = fz8117-100)
-  - **Variant matching**: Case-insensitive (43 = 43)
-  - Posts to the same channel where command was executed
-  - Message format: "WANT TO BUY" + role mention + channel mention + WTB link + product embed
-  - React with ✅ to delete the message
+### Deployment
 
-## API Endpoints
+Procfile configured for Heroku: `web: python main.py`
 
-- `GET /`: Service info and available endpoints
-- `GET /health`: Health check with product cache status
-- `GET /docs`: Swagger UI
+## Key Implementation Notes
 
-## Important Implementation Details
-
-- **Case-Insensitive Matching**: Both SKU and variant matching ignore case
-  - `/wtb FZ8117-100 43` = `/wtb fz8117-100 43` = `/wtb Fz8117-100 43`
-- **Cache File Format**:
-  - Saved as SKU-indexed JSON object (not array) for easy reading
-  - Structure: `{"products": {"SKU-123": {...}, ...}, "products_without_sku": [...]}`
-  - Includes metadata: `total_products`, `products_with_sku`, `last_update`
-- **Cache Behavior**:
-  - First startup without cache: Fetches all products (~528), blocks commands until complete
-  - Subsequent startups: Loads from `products_cache.json` if < 24h old
-  - 24h background refresh: Fetches new data but doesn't block commands (uses existing cache)
-  - Cache file persists between restarts
-- **Command Availability**:
-  - Blocked: When `is_refreshing=True` AND `has_cache=False` (initial fetch only)
-  - Available: When cache exists, even during background refresh
-- **Role-Based Permissions**:
-  - Only users with role ID 1424509842491707392 or 1338230016147980308 can use `/wtb`
-  - Change `allowed_role_ids` in `bot.py` to modify
-- **Pagination**: Fetches products in pages of 250 until empty response
-- **Message Deletion**: Messages posted by bot containing "WANT TO BUY" can be deleted by anyone reacting with ✅
-- **Channel Mentions**: Role mention (1344067083465654282) and channel mention (1344381116613660682) are hardcoded in message content
-- **WTB Link**: Hardcoded to `https://www.wtbmarketlist.eu/list/355476796801679378`
-- **Image Priority**: Uses variant `featured_image` if set, otherwise first product image
-- **Logging**: All logs include timestamps via `logger_config.py` with colored output
-- **No Testing**: No test framework configured
+- **No test framework** — no pytest or test files exist
+- **Python 3.13** — project targets Python 3.13 (venv)
+- **Global singletons**: `product_cache` and `discord_bot` are module-level instances imported throughout
+- **Image priority**: variant `featured_image` > first product image
+- **Cache file format**: `{"products": {"SKU": {...}}, "products_without_sku": [...], "last_update": ..., "total_products": ..., "products_with_sku": ...}` — supports legacy array format on load
